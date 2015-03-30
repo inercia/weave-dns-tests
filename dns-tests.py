@@ -3,7 +3,7 @@
 # Usage:
 # Just run the script with root privileges and pointing to the WeaveDNS executable.
 #
-# $ sudo ./dns-tests.py -w $GOPATH/go/src/github.com/zettio/weave/weavedns/weavedns
+# $ sudo ./dns-tests.py -w $GOPATH/src/github.com/zettio/weave/weavedns/weavedns
 #
 # Requirements:
 #
