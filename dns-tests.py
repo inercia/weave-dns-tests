@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 #
 # Usage:
-# Just run the script with root privileges and pointing to the WeaveDNS executable.
+# Just run the script with root privileges, optionally pointing to the WeaveDNS executable.
 #
-# $ sudo ./dns-tests.py -w $GOPATH/src/github.com/zettio/weave/weavedns/weavedns
+# $ sudo -E ./dns-tests.py -d
 #
 # Requirements:
 #
@@ -47,6 +47,21 @@ CACHE_NEG_TTL = 30
 
 #
 ADDITIONAL_RDCLASS = 65535
+
+# the GOPATH
+try:
+    GOPATH=os.environ["GOPATH"]
+except KeyError:
+    GOPATH=""
+
+# default WeaveDNS executable
+DEFAULT_WEAVEDNS=os.path.join(GOPATH, 'src', 'github.com', 'weaveworks', 'weave', 'weavedns', 'weavedns')
+
+# default args
+DEFAULT_WEAVEDNS_ARGS="-watch=false -debug -wait=0 -x-refresh=0"
+
+# we must use a valid, external fallback, otherwise, it could lead to loops...
+DEFAULT_FALLBACK="8.8.8.8:53"
 
 ########################################################################################################################
 
@@ -150,9 +165,11 @@ def dumpDefaultDevice(h):
         log(" [%s] %s" % (h.name, l))
 
 
-def runWeaveDNS(h, exe, debug=False):
+def runWeaveDNS(h, exe, debug=False, fallback=None):
     log("Running WeaveDNS at %s [%s, dev:%s]" % (h.name, h.IP(), h.intf()))
-    cmdLine = '%s -watch=false -debug -iface="%s" -wait=0' % (exe, h.intf())
+    cmdLine = '%s %s -iface="%s"' % (exe, DEFAULT_WEAVEDNS_ARGS, h.intf())
+    if fallback:
+        cmdLine += " -x-fallback=%s" % fallback
     if debug:
         log(" ... running: %s" % cmdLine)
     p = h.popen(shlex.split(cmdLine), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -304,7 +321,7 @@ def killProc(h, p):
 
 
 @contextmanager
-def weaveDnsNetwork(num, weavedns, connCheck=False, debug=False):
+def weaveDnsNetwork(num, weavedns, connCheck=False, debug=False, pause=False, fallback=None):
     net = None
     hw = []
     rc = 0
@@ -318,10 +335,14 @@ def weaveDnsNetwork(num, weavedns, connCheck=False, debug=False):
 
         for h in net.hosts:
             time.sleep(1)
-            w = runWeaveDNS(h, weavedns, debug=debug)
+            w = runWeaveDNS(h, weavedns, debug=debug, fallback=fallback)
             hw.append((h, w))
 
         yield net
+
+        if pause:
+        	log("Pausing the simulation... type 'exit'/Ctrl-D for quitting")
+        	CLI(net)
 
     except SetupError, e:
         error("Could not setup test: %s" % e)
@@ -372,18 +393,20 @@ def assertNameInSet(name, names):
 # Main tests
 ##########################################################################################################
 
-ARGS_HELP = 'ARGS: --exe=<weavedns-exe> --weavedns= --time= --debug", "conn-check"'
+ARGS_HELP = 'ARGS: [--exe=|--weavedns=<EXE>] [--time=TIME] [--debug] [--conn-check] [--fallback=SRV:PORT]'
 
 if __name__ == '__main__':
 
     weavedns = ''
     timeout = 10
     debug = False
+    pause = False
     connCheck = False
+    fallback=DEFAULT_FALLBACK
 
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "hn:w:t:dc",
-                                   ["exe=", "weavedns=", "time=", "debug", "conn-check"])
+        opts, args = getopt.getopt(sys.argv[1:], "hn:w:t:dcp",
+                                   ["exe=", "weavedns=", "time=", "debug", "conn-check", "pause", "fallback="])
     except getopt.GetoptError:
         print ARGS_HELP
         sys.exit(2)
@@ -394,11 +417,15 @@ if __name__ == '__main__':
             sys.exit()
         elif opt in ("-d", "--debug"):
             debug = True
+        elif opt in ("-p", "--pause"):
+            pause = True
         elif opt in ("-c", "--conn-check"):
             connCheck = True
         elif opt in ("-w", "--weavedns", "--exe"):
             log("Using WeaveDNS from %s" % arg)
             weavedns = arg
+        elif opt in ("--fallback"):
+            fallback=str(arg)
         elif opt in ("-t", "--time"):
             timeout = int(arg)
         else:
@@ -407,10 +434,13 @@ if __name__ == '__main__':
 
     if not weavedns:
         here = os.path.dirname(os.path.realpath(__file__))
-        weavedns = os.path.join(here, 'weavedns', 'weavedns')
+        for t in [os.path.join(here, 'weavedns', 'weavedns'), DEFAULT_WEAVEDNS]:
+        	if os.path.exists(t):
+        		weavedns = t
+        		break
 
     if not os.path.exists(weavedns):
-        log("Could not find WeaveDNS executable at %s" % weavedns)
+        log("Could not find WeaveDNS executable at '%s'" % weavedns)
         sys.exit(1)
 
     ###################################################
@@ -418,7 +448,7 @@ if __name__ == '__main__':
     lg.setLogLevel('info')
 
     log("Testing distributed A-query with negative cache")
-    with weaveDnsNetwork(2, weavedns, debug=debug) as net:
+    with weaveDnsNetwork(2, weavedns, debug=debug, pause=pause, fallback=fallback) as net:
         NAME = 'something.weave.local.'
         IP = '10.0.0.9'
 
@@ -441,7 +471,7 @@ if __name__ == '__main__':
         success("Distributed A-query was OK!")
 
     log("Testing distributed PTR-query with negative cache")
-    with weaveDnsNetwork(2, weavedns, debug=debug) as net:
+    with weaveDnsNetwork(2, weavedns, debug=debug, pause=pause, fallback=fallback) as net:
         NAME = 'something.weave.local.'
         IP = '10.0.0.9'
 
